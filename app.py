@@ -4,6 +4,7 @@ from PIL import Image
 import torch
 import pandas as pd
 import pytesseract
+import numpy as np
 
 # Load fine-tuned model and processor
 processor = AutoProcessor.from_pretrained("Kiruba11/layoutlmv3-resume-ner2")
@@ -15,22 +16,35 @@ model.to(device)
 
 # Helper function to extract entities
 
+import easyocr
+
+# Init EasyOCR reader
+reader = easyocr.Reader(['en'], gpu=False)
+
 def predict_entities(image: Image.Image):
-    # Use Tesseract to extract words and bounding boxes
-    ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    # Convert image to numpy array for easyocr
+    image_np = np.array(image)
+
+    # Run OCR
+    results = reader.readtext(image_np)
 
     words = []
     boxes = []
 
-    for i in range(len(ocr_data["text"])):
-        word = ocr_data["text"][i]
-        if word.strip() == "":
+    for (bbox, text, conf) in results:
+        if text.strip() == "":
             continue
-        x, y, w, h = ocr_data["left"][i], ocr_data["top"][i], ocr_data["width"][i], ocr_data["height"][i]
-        words.append(word)
-        boxes.append([x, y, x + w, y + h])
 
-    # Resize boxes to 0–1000 scale as required by LayoutLMv3
+        # Extract coordinates
+        x_min = int(min([point[0] for point in bbox]))
+        y_min = int(min([point[1] for point in bbox]))
+        x_max = int(max([point[0] for point in bbox]))
+        y_max = int(max([point[1] for point in bbox]))
+
+        words.append(text)
+        boxes.append([x_min, y_min, x_max, y_max])
+
+    # Normalize to 0–1000 scale
     width, height = image.size
     normalized_boxes = [
         [
@@ -42,7 +56,7 @@ def predict_entities(image: Image.Image):
         for box in boxes
     ]
 
-    # Processor expects words and boxes
+    # Prepare for model
     encoding = processor(image=image, words=words, boxes=normalized_boxes, return_tensors="pt", truncation=True)
     encoding = {k: v.to(device) for k, v in encoding.items()}
 
